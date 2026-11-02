@@ -4,11 +4,11 @@ Georgian automotive parts request platform. GitHub is the source of truth for co
 
 Primary website: https://teslamap.github.io/PARTFLOW/
 
-- [Customer](https://teslamap.github.io/PARTFLOW/customer.html)
-- [Shop](https://teslamap.github.io/PARTFLOW/shop.html)
-- [Admin](https://teslamap.github.io/PARTFLOW/admin.html)
-- [Superadmin](https://teslamap.github.io/PARTFLOW/superadmin.html)
-- [Mobile customer](https://teslamap.github.io/PARTFLOW/mobile-customer.html)
+- [Customer](https://teslamap.github.io/rus/customer.html)
+- [Shop](https://teslamap.github.io/rus/shop.html)
+- [Admin](https://teslamap.github.io/rus/admin.html)
+- [Superadmin](https://teslamap.github.io/rus/superadmin.html)
+- [Mobile customer](https://teslamap.github.io/rus/mobile-customer.html)
 
 სამუშაო სია: [ROADMAP.md](ROADMAP.md) — დასრულებული და დარჩენილი ეტაპები.
 
