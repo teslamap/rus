@@ -1,0 +1,35 @@
+name: Build and security regression tests
+on:
+  workflow_call:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm install --global npm@11.6.2 --no-audit --no-fund
+      - run: npm ci
+      - run: npm run check
+      - run: npm run test:towing
+      - run: npm run test:maps
+      - run: node tests/foundation.mjs
+      - run: node tests/batch-policy.mjs && node build-tools/prepare-api.mjs
+      - run: node tests/features.mjs && node tests/api-features.mjs && node tests/ai-provider.mjs && node tests/vehicle.mjs && node tests/second-batch.mjs && node tests/notifications.mjs && node tests/referrals.mjs
+      - run: npm run build:mobile
+      - run: npm run test:business
+      - run: npm run test:push
+      - run: npm run test:install
+      - run: npm run test:android-identity
+      - run: npx firebase-tools emulators:exec --only firestore --project demo-partflow "npm run test:rules && node tests/api-transactions.mjs && node tests/otp-transactions.mjs && node tests/batch-transactions.mjs && node tests/expansion-rules.mjs && npm run test:towing:rules && npm run test:maps:rules"

@@ -1,0 +1,51 @@
+{
+  "name": "partflow-firebase",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite --host 127.0.0.1",
+    "build:mobile": "vite build && node build-tools/mobile.mjs",
+    "android:sync": "npm run build:mobile && cap sync android",
+    "android:open": "cap open android",
+    "android:setup": "npm run build:mobile && cap add android && cap sync android",
+    "check": "tsc --noEmit",
+    "test:rules": "node tests/catalog.mjs && node tests/rules.mjs && node tests/archive.mjs && node tests/realtime.mjs && node tests/commerce.mjs && node tests/shop-panel.mjs && node tests/deletion.mjs && node tests/chat-workflow.mjs && node tests/auto-service.mjs && node tests/migration.mjs && node tests/service-management.mjs && node tests/owned-services.mjs",
+    "test:maps": "node tests/maps.mjs",
+    "test:maps:rules": "node tests/maps-rules.mjs",
+    "test:towing": "node tests/towing.mjs && node tests/towing-layout.mjs",
+    "test:towing:rules": "node tests/towing-rules.mjs",
+    "test:push": "node tests/push.mjs",
+    "test:install": "node tests/app-install.mjs",
+    "test:android-identity": "node tests/android-identity.mjs",
+    "android:push:setup": "npm run build:mobile && cap add android && cap sync android && node build-tools/prepare-push-android.mjs",
+    "test:business": "node tests/business.mjs",
+    "migrate:business-types": "node scripts/migrate-business-types.mjs"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/push-notifications": "^8.1.3",
+    "firebase": "latest",
+    "firebase-admin": "latest",
+    "leaflet": "^1.9.4",
+    "lucide-react": "^1.31.0",
+    "qrcode-generator": "2.0.4",
+    "react": "19.2.6",
+    "react-dom": "19.2.6",
+    "tesseract.js": "7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.3",
+    "@firebase/rules-unit-testing": "latest",
+    "@types/leaflet": "^1.9.21",
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "typescript": "5.9.3",
+    "vite": "8.0.13"
+  }
+}

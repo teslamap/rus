@@ -1,0 +1,34 @@
+# PARTFLOW live customer Android
+
+One APK, customer panel only. MainActivity opens exactly https://teslamap.github.io/PARTFLOW/mobile-customer.html in an Android WebView. It does not load bundled HTML or instantiate a Capacitor bridge. Shop/admin/superadmin URLs and other origins are blocked inside the app. No native JavaScript interface is exposed.
+
+Website changes reach this APK when the page is loaded again, without reinstalling it. Initial loading bypasses the WebView cache; reopening after more than one minute in the background also reloads the page unless a modal or focused form is active. Firestore snapshot listeners update requests, offers, acceptance and moderation while the page is open, without reloading or losing forms. This is not background push notification support. Internet is required; failed page loads show a retry screen.
+
+The customer has its own persistent Firebase Auth session. Web panels keep their independent sessions and have no cross-panel navigation links. Existing accounts and backend security roles remain shared in Firebase. Native WebView email/password sign-in is supported; Google popup sign-in is not used in the app.
+
+The Android package is registered in Firebase as `1:429553713786:android:d48cc58d5f40b8a64db1c3`. Its public `google-services.json` is copied from `android-overrides/app/` into generated Android projects. The native wrapper initializes Firebase App Check with Play Integrity and exposes only a token request through AndroidX `WebViewCompat.addWebMessageListener`, restricted to the exact GitHub Pages origin, the main frame, and the customer page path. The web client uses this bridge only when `VITE_ANDROID_APPCHECK=1`; anonymous sign-in additionally requires `VITE_ANDROID_ANON_AUTH=1`. Both build flags are `0` in the APK workflow today. Production enforcement and anonymous auth remain off until a stable release signing identity is registered with App Check and the App Check metrics have been checked. Debug APKs use short-lived runner signing keys and are unsuitable as the final Play Integrity identity.
+
+## Build
+
+The GitHub Actions Android workflow uses the runner's existing SDK, Node 24 and Java 21. It generates the scaffold, applies android-overrides/ via build-tools/prepare-live-android.mjs, compiles and verifies PARTFLOW-customer-live.apk, then uploads PARTFLOW-customer-live-APK with checksums. No Firebase admin secrets are needed. Application ID: com.partflow.customer. Version: 3.0. Minimum Android: 7.0 (API 24).
+
+On customer web pages, Android Chrome checks for this package using `getInstalledRelatedApps()` and the reciprocal Digital Asset Links statement in the Android manifest. If the check is unavailable, the user can confirm installation in the prompt. The current unofficial APK is available as a GitHub Actions artifact; a stable public download URL requires publishing an APK release.
+
+For local setup use Node 24.12+, npm 11.6.2, JDK 21 and Android SDK 36:
+
+    npm ci
+    npm run android:setup
+    node build-tools/prepare-live-android.mjs
+    cd android
+    ./gradlew assembleDebug
+
+On Windows use gradlew.bat. If android/ already exists, use npm run android:sync before preparing the live wrapper instead of android:setup.
+
+The artifact is a debug/testing APK. Fresh GitHub runners generate different debug signing keys; replacing an older test build may require uninstalling it once. Subsequent website-only updates do not require installing another APK. Native permission/feature changes still require a new signed native build. Store publication requires persistent release signing keys and device testing.
+
+Photo file selection, TLS error cancellation, HTTPS-only navigation, safe insets, back-to-close-modal behavior, and retry after offline launch are implemented. Before public release, verify sign-in persistence, gallery upload, keyboard, offline recovery and back navigation on real Android devices.
+Website-only pushes publish GitHub Pages without rebuilding this APK. The Android workflow runs for native wrapper/dependency/config changes or a manual run.
+
+## Optional native Push build
+
+The existing remote-only v2 APK cannot access native Push. The opt-in `npm run android:push:setup` builds the v3 bridge preparation path. See [COMMERCE.md](COMMERCE.md#android-push-readiness) for Firebase configuration, permissions, trusted sender and deployment prerequisites. Chat, orders and the in-app inbox work in the existing APK without Push.

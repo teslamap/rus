@@ -1,0 +1,73 @@
+name: Android customer APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'build-tools/prepare-live-android.mjs'
+      - 'android-overrides/**'
+      - 'capacitor.config.ts'
+      - 'package*.json'
+      - 'vite.config.ts'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-customer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Use the runner's installed Android SDK
+        run: |
+          test -f "$ANDROID_HOME/platforms/android-36/android.jar"
+          test -x "$ANDROID_HOME/build-tools/35.0.0/apksigner"
+      - run: npm install --global npm@11.6.2 --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
+      - name: Generate customer-only live WebView project
+        env:
+          VITE_ANDROID_APPCHECK: '0'
+          VITE_ANDROID_ANON_AUTH: '0'
+        run: |
+          npm run android:setup
+          node build-tools/prepare-live-android.mjs
+          chmod +x android/gradlew
+      - name: Build installable debug APK
+        working-directory: android
+        run: ./gradlew --no-daemon -Pandroid.builder.sdkDownload=false assembleDebug
+      - name: Verify APK signature and package
+        run: |
+          mkdir -p apk-output
+          cp android/app/build/outputs/apk/debug/app-debug.apk apk-output/PARTFLOW-customer-live.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose apk-output/PARTFLOW-customer-live.apk
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging apk-output/PARTFLOW-customer-live.apk > apk-output/package-info.txt
+          grep "uses-permission: name='android.permission.ACCESS_FINE_LOCATION'" apk-output/package-info.txt
+          grep "uses-permission: name='android.permission.ACCESS_COARSE_LOCATION'" apk-output/package-info.txt
+          grep "package: name='com.partflow.customer'" apk-output/package-info.txt
+          python - <<'PY'
+          from zipfile import ZipFile
+          with ZipFile('apk-output/PARTFLOW-customer-live.apk') as apk:
+              assert not any(name.startswith('assets/public/') for name in apk.namelist()), 'Bundled web pages must not be packaged'
+          PY
+          sha256sum apk-output/PARTFLOW-customer-live.apk > apk-output/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PARTFLOW-customer-live-APK
+          path: apk-output/
+          if-no-files-found: error
+          retention-days: 14
+

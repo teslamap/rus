@@ -1,0 +1,320 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Data model: pf_members/{uid}: name(string 1..100), role(customer/admin/superadmin), createdAt(timestamp).
+    // pf_shops/{uid}: ownerId, name, city, business phone, status, rules(list), rulesMap(map), createdAt.
+    // pf_requests/{id}: immutable owner/vehicle/part/details/photos(0..4 small JPEG strings), status, previousStatus, acceptedOfferId, createdAt.
+    // pf_offers/{requestId_uid}: immutable requestId, ownerId(customer), shopId, shopName, positive part price, optional serviceAvailable/servicePrice quote, condition, delivery, note, status, createdAt.
+    // pf_categories/{name}: name(string 1..80), createdAt(timestamp).
+    // Email/passwords are owned by Firebase Auth, never stored in shared Firestore documents.
+    function validInfrastructure(d){return d.keys().hasAll(['requestDays','chatDays','garageDays','logoDays','updatedBy','updatedAt']) && d.keys().hasOnly(['requestDays','chatDays','garageDays','logoDays','updatedBy','updatedAt']) && d.requestDays is int && d.requestDays>=1 && d.requestDays<=3650 && d.chatDays is int && d.chatDays>=1 && d.chatDays<=3650 && d.garageDays is int && d.garageDays>=1 && d.garageDays<=3650 && d.logoDays is int && d.logoDays>=1 && d.logoDays<=3650 && d.updatedBy is string && d.updatedAt is timestamp;}
+    function flag(key,fallback){return exists(/databases/$(database)/documents/pf_settings/control)?get(/databases/$(database)/documents/pf_settings/control).data.flags.get(key,fallback)=='ON':fallback=='ON';}
+    function signed(){return request.auth != null && (request.auth.token.firebase.sign_in_provider != 'anonymous' || (request.auth.token.get('apkVerified',false)==true && flag('anonymousApkAuth','OFF'))); }
+    // Trusted bootstrap identity. A verified email is required; registration order never grants admin.
+    function founder(){return signed() && request.auth.token.email_verified == true && request.auth.token.email == 'suloanani1@gmail.com';}
+    function superadmin(){return founder() || (signed() && get(/databases/$(database)/documents/pf_members/$(request.auth.uid)).data.role == 'superadmin');}
+    function admin(){return superadmin() || (signed() && get(/databases/$(database)/documents/pf_members/$(request.auth.uid)).data.role == 'admin');}
+    function deleting(id){return exists(/databases/$(database)/documents/pf_deletions/$(id));}
+    function deletingBySuperadmin(id){return superadmin() && get(/databases/$(database)/documents/pf_deletions/$(id)).data.status=='pending';}
+    function text(v,n){return v is string && v.size()>0 && v.size()<=n;}
+    function validMember(d){return d.keys().hasAll(['name','role','createdAt']) && d.keys().hasOnly(['name','role','createdAt']) && text(d.name,100) && d.role in ['customer','admin','superadmin'] && d.createdAt is timestamp;}
+    function validGarageVehicle(d){return d.keys().hasAll(['brand','model','year','engine','vin','trim','fuel','createdAt']) && d.keys().hasOnly(['brand','model','year','engine','vin','trim','fuel','createdAt','plate']) && (!d.keys().hasAny(['plate']) || (d.plate is string && d.plate.matches('[A-Z0-9 -]{1,12}'))) && text(d.brand,60) && text(d.model,80) && d.year is int && d.year>=1950 && d.year<=request.time.year()+1 && text(d.engine,80) && d.vin is string && (d.vin==''||d.vin.matches('[A-HJ-NPR-Z0-9]{17}')) && d.trim is string && d.trim.size()<=80 && d.fuel is string && d.fuel.size()<=50 && d.createdAt is timestamp;}
+    function serviceBusiness(d){return d.get('businessType','parts_shop')=='auto_service';}
+    function validShop(d){return d.keys().hasAll(['ownerId','name','city','phone','status','rulesMap','createdAt']) && d.keys().hasOnly(['ownerId','name','city','phone','status','rulesMap','createdAt','businessType','parentShopId','reviewReason','reviewedBy','reviewedAt','mapLocation','mapAddress']) && (!d.keys().hasAny(['mapLocation']) || validTowLocation(d.mapLocation)) && (!d.keys().hasAny(['mapAddress']) || (d.mapAddress is string && d.mapAddress.size()<=300)) && text(d.ownerId,128) && text(d.name,100) && text(d.city,80) && text(d.phone,30) && d.phone.matches('[+0-9 ()-]{9,30}') && d.get('businessType','parts_shop') in ['parts_shop','auto_service'] && (serviceBusiness(d)?d.status in ['pending','pending_approval','approved','rejected','needs_clarification','suspended']:d.status in ['pending','approved','suspended']) && (!d.keys().hasAny(['reviewReason','reviewedBy','reviewedAt']) || (serviceBusiness(d) && d.keys().hasAll(['reviewReason','reviewedBy','reviewedAt']) && d.reviewReason is string && d.reviewReason.size()<=1000 && text(d.reviewedBy,128) && d.reviewedAt is timestamp)) && (!d.keys().hasAny(['parentShopId']) || (serviceBusiness(d) && text(d.parentShopId,128) && d.parentShopId==d.ownerId)) && d.rulesMap is map && d.rulesMap.size()>0 && d.rulesMap.size()<=30 && d.rulesMap.values().hasOnly([true]) && d.createdAt is timestamp;}
+    function photo(p){return p is string && p.size()<=180000 && p.matches('data:image/jpeg;base64,.*');}
+    function validPhotos(p){return p is list && p.size()<=4 && (p.size()<1||photo(p[0])) && (p.size()<2||photo(p[1])) && (p.size()<3||photo(p[2])) && (p.size()<4||photo(p[3]));}
+    function validRequest(d){return d.keys().hasAll(['ownerId','brand','model','year','engine','vin','category','part','description','city','condition','budget','photos','status','previousStatus','acceptedOfferId','createdAt']) && d.keys().hasOnly(['ownerId','brand','model','year','engine','vin','category','part','description','city','condition','budget','photos','status','previousStatus','acceptedOfferId','createdAt','searchScope','expandedAt']) && (!d.keys().hasAny(['searchScope']) || d.searchScope=='city') && (!d.keys().hasAny(['expandedAt']) || (d.keys().hasAny(['searchScope']) && d.expandedAt is timestamp)) && text(d.ownerId,128) && text(d.brand,60) && text(d.model,80) && d.year is int && d.year>=1950 && d.year<=request.time.year()+1 && text(d.engine,80) && d.vin is string && (d.vin==''||d.vin.matches('[A-HJ-NPR-Z0-9]{17}')) && text(d.category,80) && text(d.part,120) && text(d.description,2000) && text(d.city,80) && d.condition in ['ნებისმიერი','ახალი','მეორადი'] && (d.budget==null||(d.budget is number&&d.budget>0&&d.budget<=1000000)) && validPhotos(d.photos) && d.status in ['open','closed','hidden'] && d.previousStatus in ['open','closed'] && (d.acceptedOfferId==null||text(d.acceptedOfferId,300)) && d.createdAt is timestamp;}
+    function searchCity(d){return d.get('searchScope','legacy')!='city' || d.city==get(/databases/$(database)/documents/pf_shops/$(request.auth.uid)).data.city || (d.status=='open' && d.acceptedOfferId==null && (d.get('expandedAt',null)!=null || request.time>=d.createdAt+duration.value(15,'m')));}
+    function shopMatch(d){let s=get(/databases/$(database)/documents/pf_shops/$(request.auth.uid)).data;let m=s.rulesMap;return !serviceBusiness(s) && s.status=='approved' && (m.get(d.brand+'~'+d.model+'~'+d.category,false)==true || m.get(d.brand+'~*~'+d.category,false)==true || m.get('*~*~'+d.category,false)==true || m.get(d.brand+'~'+d.model+'~*',false)==true || m.get(d.brand+'~*~*',false)==true || m.get('*~*~*',false)==true);}
+    function requestRead(d,id){return signed() && (admin() || d.ownerId==request.auth.uid || (d.status in ['open','closed'] && shopMatch(d)) || exists(/databases/$(database)/documents/pf_offers/$(id+'_'+request.auth.uid)));}
+    function selectedOffer(d,id){let o=get(/databases/$(database)/documents/pf_offers/$(d.acceptedOfferId)).data;return o.requestId==id && o.ownerId==request.auth.uid && getAfter(/databases/$(database)/documents/pf_confirmations/$(d.acceptedOfferId)).data.status=='accepted' && getAfter(/databases/$(database)/documents/pf_orders/$(id)).data.offerId==d.acceptedOfferId;}
+    function validOffer(d){return d.keys().hasAll(['requestId','ownerId','shopId','shopName','price','condition','delivery','note','status','createdAt']) && d.keys().hasOnly(['requestId','ownerId','shopId','shopName','price','serviceAvailable','servicePrice','condition','delivery','note','status','createdAt']) && text(d.requestId,128) && text(d.ownerId,128) && text(d.shopId,128) && text(d.shopName,100) && d.price is number && d.price>0 && d.price<=1000000 && (!d.keys().hasAny(['serviceAvailable','servicePrice']) || (d.keys().hasAll(['serviceAvailable','servicePrice']) && d.serviceAvailable is bool && d.servicePrice is number && d.servicePrice>=0 && d.servicePrice<=1000000 && (d.serviceAvailable || d.servicePrice==0))) && d.condition in ['ახალი','მეორადი'] && text(d.delivery,120) && text(d.note,1000) && d.status=='pending' && d.createdAt is timestamp;}
+    function validCategory(d){return d.keys().hasAll(['name','createdAt']) && d.keys().hasOnly(['name','createdAt']) && text(d.name,80) && d.createdAt is timestamp;}
+    match /pf_contacts/{uid} {
+      allow read: if signed() && request.auth.uid==uid && flag('phoneContact','ON');
+      allow create,update: if signed() && request.auth.uid==uid && flag('phoneContact','ON') && request.resource.data.keys().hasOnly(['phone','phoneVerified','updatedAt']) && request.resource.data.phone is string && request.resource.data.phone.matches('[+]9955[0-9]{8}') && request.resource.data.phoneVerified==false && request.resource.data.updatedAt==request.time;
+      allow delete: if signed() && request.auth.uid==uid;
+    }
+    match /pf_rewards/{uid} {allow read: if signed() && uid==request.auth.uid && flag('loyaltyPoints','OFF'); allow write: if false;}
+    match /pf_vouchers/{id} {allow read: if signed() && flag('vouchers','OFF') && (resource.data.ownerId==request.auth.uid || resource.data.partnerId==request.auth.uid || superadmin()); allow write: if false;}
+    match /pf_promotions/{id} {allow read: if signed() && flag('partnerPromotions','OFF') && (resource.data.status=='approved'||resource.data.partnerId==request.auth.uid||superadmin()); allow write: if false;}
+    match /pf_referrals/{uid} {allow read: if signed() && flag('referrals','OFF') && uid==request.auth.uid; allow write: if false;}
+    match /pf_members/{uid} {
+      allow read: if signed() && (request.auth.uid==uid || superadmin());
+      allow create: if signed() && uid==request.auth.uid && validMember(request.resource.data) && request.resource.data.createdAt==request.time && (request.resource.data.role=='customer'||(founder()&&request.resource.data.role=='superadmin'));
+      allow update: if validMember(request.resource.data) && request.resource.data.createdAt==resource.data.createdAt && ((signed()&&uid==request.auth.uid&&request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name'])) || (superadmin()&&request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role']) && ((uid!=request.auth.uid&&resource.data.role!='superadmin'&&request.resource.data.role in ['customer','admin'])||(founder()&&uid==request.auth.uid&&request.resource.data.role=='superadmin'))));
+    }
+    // A user's garage is private to that signed-in account. Vehicle identity is immutable.
+    match /pf_garage/{uid}/vehicles/{vehicleId} {
+      allow read: if flag('garage','ON') && signed() && request.auth.uid==uid;
+      allow create: if flag('garage','ON') && signed() && request.auth.uid==uid && validGarageVehicle(request.resource.data) && request.resource.data.createdAt==request.time;
+      allow update: if false;
+      allow delete: if flag('garage','ON') && signed() && request.auth.uid==uid;
+    }
+    match /pf_shops/{uid} {
+      allow read: if (resource.data.status=='approved' && serviceBusiness(resource.data)) || (signed() && (uid==request.auth.uid||resource.data.ownerId==request.auth.uid||resource.data.status=='approved'||admin()));
+      allow create: if signed()&&validShop(request.resource.data)&&request.resource.data.ownerId==request.auth.uid&&((uid==request.auth.uid&&!request.resource.data.keys().hasAny(['parentShopId']))||(serviceBusiness(request.resource.data)&&uid.matches('service_[a-zA-Z0-9]{20}')&&uid!=request.auth.uid&&request.resource.data.parentShopId==request.auth.uid&&exists(/databases/$(database)/documents/pf_shops/$(request.auth.uid))&&!serviceBusiness(serviceParent(request.auth.uid))))&&request.resource.data.status in (serviceBusiness(request.resource.data)?['pending','pending_approval']:['pending'])&&!request.resource.data.keys().hasAny(['reviewReason','reviewedBy','reviewedAt'])&&request.resource.data.createdAt==request.time;
+      allow update: if validShop(request.resource.data)
+        && request.resource.data.ownerId==resource.data.ownerId
+        && request.resource.data.createdAt==resource.data.createdAt
+        && request.resource.data.get('parentShopId','')==resource.data.get('parentShopId','')
+        && request.resource.data.get('businessType','parts_shop')==resource.data.get('businessType','parts_shop')
+        && ((signed() && resource.data.ownerId==request.auth.uid
+          && (!serviceBusiness(resource.data)||resource.data.status!='suspended')
+          && request.resource.data.status in (serviceBusiness(resource.data)?['pending','pending_approval']:['pending'])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name','city','phone','rulesMap','status','businessType','mapLocation','mapAddress']))
+        || (admin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['mapLocation','mapAddress']))
+        || (!serviceBusiness(resource.data) && admin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']))
+        || (serviceBusiness(resource.data) && superadmin()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','reviewReason','reviewedBy','reviewedAt'])
+          && request.resource.data.status in ['approved','rejected','needs_clarification','suspended']
+          && request.resource.data.reviewedBy==request.auth.uid && request.resource.data.reviewedAt==request.time
+          && (request.resource.data.status=='approved'?request.resource.data.reviewReason=='':text(request.resource.data.reviewReason,1000))));
+    }
+    // Auto-service setup. Parent approval gates every public child read.
+    // catalog: name<=100, description<=1000, duration 15..480, active, timestamps.
+    // staff: public name/specialty, 1..8 local catalog IDs, weekly days, active, timestamps.
+    // hours/weekly: Asia/Tbilisi timezone, exactly seven weekly days, timestamps.
+    // closures: a real calendar day, staff ID or whole business, active, timestamps.
+    function serviceParent(uid){return get(/databases/$(database)/documents/pf_shops/$(uid)).data;}
+    function serviceOwner(uid){return signed() && request.auth.uid==serviceParent(uid).ownerId && serviceBusiness(serviceParent(uid));}
+    function servicePublic(uid){let p=serviceParent(uid);return serviceBusiness(p) && p.status=='approved';}
+    function serviceInspect(uid){return serviceOwner(uid) || (signed() && admin() && serviceBusiness(serviceParent(uid)));}
+    // Service orders live under their business, independently of parts orders.
+    // Only the customer, business owner and superadmin can read them.
+    function validServiceOrder(uid,d){return d.keys().hasAll(['businessId','customerId','description','status','createdAt','updatedAt']) && d.keys().hasOnly(['businessId','customerId','description','status','createdAt','updatedAt']) && d.businessId==uid && text(d.businessId,128) && text(d.customerId,128) && text(d.description,2000) && d.status in ['pending','accepted','completed','cancelled'] && d.createdAt is timestamp && d.updatedAt==request.time;}
+    match /pf_shops/{uid}/serviceOrders/{id} {
+      allow read: if signed() && (superadmin() || serviceOwner(uid) || resource.data.customerId==request.auth.uid);
+      allow create: if signed() && flag('orders','ON') && servicePublic(uid) && validServiceOrder(uid,request.resource.data) && request.resource.data.customerId==request.auth.uid && !serviceOwner(uid) && request.resource.data.status=='pending' && request.resource.data.createdAt==request.time;
+      allow update: if signed() && validServiceOrder(uid,request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt'])
+        && ((resource.data.status in ['pending','accepted'] && request.resource.data.status=='cancelled' && (resource.data.customerId==request.auth.uid || serviceOwner(uid) || superadmin()))
+          || ((superadmin() || (serviceOwner(uid) && servicePublic(uid))) && ((resource.data.status=='pending' && request.resource.data.status=='accepted') || (resource.data.status=='accepted' && request.resource.data.status=='completed'))));
+      allow delete: if false;
+    }
+    // Customer collection-group history remains available after suspension.
+    match /{parent=**}/serviceOrders/{id} {
+      allow read: if signed() && resource.data.customerId==request.auth.uid;
+    }
+    function setupDay(d){return d is map && d.keys().hasOnly(['open','start','end']) && d.open is bool && d.start is int && d.end is int && d.start>=0 && d.start<=1439 && d.end>=0 && d.end<=1439 && (d.open?d.end>d.start:(d.start==0&&d.end==0));}
+    function setupWeek(w){return w is list && w.size()==7 && setupDay(w[0]) && setupDay(w[1]) && setupDay(w[2]) && setupDay(w[3]) && setupDay(w[4]) && setupDay(w[5]) && setupDay(w[6]);}
+    function setupTimes(d){return d.createdAt is timestamp && d.updatedAt==request.time;}
+    function validServiceItem(d){return d.keys().hasAll(['name','description','durationMinutes','active','createdAt','updatedAt']) && d.keys().hasOnly(['name','description','durationMinutes','active','createdAt','updatedAt']) && text(d.name,100) && d.description is string && d.description.size()<=1000 && d.durationMinutes is int && d.durationMinutes>=15 && d.durationMinutes<=480 && d.durationMinutes%15==0 && d.active is bool && setupTimes(d);}
+    function localService(uid,id){return id is string && id.matches('[-a-zA-Z0-9_]{1,128}') && exists(/databases/$(database)/documents/pf_shops/$(uid)/catalog/$(id));}
+    function staffServices(uid,s){return s is list && s.size()>=1 && s.size()<=8 && s.toSet().size()==s.size() && localService(uid,s[0]) && (s.size()<2||localService(uid,s[1])) && (s.size()<3||localService(uid,s[2])) && (s.size()<4||localService(uid,s[3])) && (s.size()<5||localService(uid,s[4])) && (s.size()<6||localService(uid,s[5])) && (s.size()<7||localService(uid,s[6])) && (s.size()<8||localService(uid,s[7]));}
+    function validServiceStaff(uid,d){return d.keys().hasAll(['name','specialty','serviceIds','days','active','createdAt','updatedAt']) && d.keys().hasOnly(['name','specialty','serviceIds','days','active','createdAt','updatedAt']) && text(d.name,100) && d.specialty is string && d.specialty.size()<=200 && staffServices(uid,d.serviceIds) && setupWeek(d.days) && d.active is bool && setupTimes(d);}
+    function validServiceHours(d){return d.keys().hasAll(['timezone','days','createdAt','updatedAt']) && d.keys().hasOnly(['timezone','days','createdAt','updatedAt']) && d.timezone=='Asia/Tbilisi' && setupWeek(d.days) && setupTimes(d);}
+    function twoDigits(n){return n<10?'0'+string(n):string(n);}
+    function validServiceClosure(uid,id,d){return d.keys().hasAll(['date','day','staffId','active','createdAt','updatedAt']) && d.keys().hasOnly(['date','day','staffId','active','createdAt','updatedAt']) && d.day is timestamp && d.day==timestamp.date(d.day.year(),d.day.month(),d.day.day()) && d.day.year()>=2020 && d.day.year()<=2100 && d.date is string && d.date.size()==10 && d.date==string(d.day.year())+'-'+twoDigits(d.day.month())+'-'+twoDigits(d.day.day()) && d.staffId is string && d.staffId.size()<=128 && (d.staffId==''||exists(/databases/$(database)/documents/pf_shops/$(uid)/staff/$(d.staffId))) && id==d.date+'_'+(d.staffId==''?'all':'staff_'+d.staffId) && d.active is bool && setupTimes(d);}
+    match /pf_shops/{uid}/catalog/{id} {
+      allow read: if serviceInspect(uid) || (servicePublic(uid) && resource.data.active==true);
+      allow create: if serviceOwner(uid) && validServiceItem(request.resource.data) && request.resource.data.createdAt==request.time;
+      allow update: if serviceOwner(uid) && validServiceItem(request.resource.data) && request.resource.data.createdAt==resource.data.createdAt;
+    }
+    match /pf_shops/{uid}/staff/{id} {
+      allow read: if serviceInspect(uid) || (servicePublic(uid) && resource.data.active==true);
+      allow create: if serviceOwner(uid) && validServiceStaff(uid,request.resource.data) && request.resource.data.createdAt==request.time;
+      allow update: if serviceOwner(uid) && validServiceStaff(uid,request.resource.data) && request.resource.data.createdAt==resource.data.createdAt;
+    }
+    match /pf_shops/{uid}/hours/{id} {
+      allow read: if id=='weekly' && (serviceInspect(uid) || servicePublic(uid));
+      allow create: if id=='weekly' && serviceOwner(uid) && validServiceHours(request.resource.data) && request.resource.data.createdAt==request.time;
+      allow update: if id=='weekly' && serviceOwner(uid) && validServiceHours(request.resource.data) && request.resource.data.createdAt==resource.data.createdAt;
+    }
+    match /pf_shops/{uid}/closures/{id} {
+      allow read: if serviceInspect(uid) || (servicePublic(uid) && resource.data.active==true);
+      allow create: if serviceOwner(uid) && validServiceClosure(uid,id,request.resource.data) && request.resource.data.createdAt==request.time;
+      allow update: if serviceOwner(uid) && validServiceClosure(uid,id,request.resource.data) && request.resource.data.createdAt==resource.data.createdAt && request.resource.data.date==resource.data.date && request.resource.data.staffId==resource.data.staffId;
+    }
+
+    match /pf_requests/{id} {
+      allow read: if requestRead(resource.data,id);
+      allow delete: if deletingBySuperadmin(id);
+      allow create: if !deleting(id)&&signed()&&validRequest(request.resource.data)&&request.resource.data.ownerId==request.auth.uid&&request.resource.data.status=='open'&&request.resource.data.previousStatus=='open'&&request.resource.data.acceptedOfferId==null&&request.resource.data.createdAt==request.time&&!request.resource.data.keys().hasAny(['expandedAt']);
+      allow update: if !deleting(id) && validRequest(request.resource.data) && ((signed()&&resource.data.ownerId==request.auth.uid&&resource.data.status=='open'&&resource.data.acceptedOfferId==null&&request.resource.data.status=='open'&&resource.data.get('searchScope','legacy')=='city'&&!resource.data.keys().hasAny(['expandedAt'])&&request.resource.data.diff(resource.data).affectedKeys().hasOnly(['expandedAt'])&&request.resource.data.expandedAt==request.time) || (signed()&&resource.data.ownerId==request.auth.uid&&resource.data.status=='open'&&request.resource.data.status=='closed'&&request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','acceptedOfferId'])&&(request.resource.data.acceptedOfferId==null||selectedOffer(request.resource.data,id))) || (admin()&&request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','previousStatus'])&&((request.resource.data.status=='hidden'&&resource.data.status!='hidden'&&request.resource.data.previousStatus==resource.data.status)||(resource.data.status=='hidden'&&request.resource.data.status==resource.data.previousStatus&&request.resource.data.previousStatus==resource.data.previousStatus))));
+    }
+    match /pf_offers/{id} {
+      allow read: if flag('offers','ON') && signed() && (admin()||resource.data.ownerId==request.auth.uid||resource.data.shopId==request.auth.uid);
+      allow create: if !deleting(request.resource.data.requestId)&&signed()&&validOffer(request.resource.data)&&id==request.resource.data.requestId+'_'+request.auth.uid&&request.resource.data.shopId==request.auth.uid&&request.resource.data.createdAt==request.time&&get(/databases/$(database)/documents/pf_requests/$(request.resource.data.requestId)).data.status=='open'&&get(/databases/$(database)/documents/pf_requests/$(request.resource.data.requestId)).data.ownerId==request.resource.data.ownerId&&request.resource.data.ownerId!=request.auth.uid&&searchCity(get(/databases/$(database)/documents/pf_requests/$(request.resource.data.requestId)).data)&&shopMatch(get(/databases/$(database)/documents/pf_requests/$(request.resource.data.requestId)).data)&&request.resource.data.shopName==get(/databases/$(database)/documents/pf_shops/$(request.auth.uid)).data.name;
+      allow delete: if deletingBySuperadmin(resource.data.requestId);
+    }
+    match /pf_categories/{id} {
+      allow read: if signed();
+      allow create: if admin()&&validCategory(request.resource.data)&&request.resource.data.createdAt==request.time;
+      allow update,delete: if false;
+    }
+    // Private archive markers: panel-local visibility only, no shared record edits.
+    // {type(enum), targetId(string <=300), label(string <=120), createdAt(timestamp)}.
+    function archiveScope(panel,type,id){
+
+      return (type=='requests' && !deleting(id) && ((panel in ['admin','superadmin'] && admin()) || (panel in ['customer','mobile-customer'] && get(/databases/$(database)/documents/pf_requests/$(id)).data.ownerId==request.auth.uid) || (panel=='shop' && requestRead(get(/databases/$(database)/documents/pf_requests/$(id)).data,id))))
+        || (type=='offers' && !deleting(get(/databases/$(database)/documents/pf_offers/$(id)).data.requestId) && ((panel in ['admin','superadmin'] && admin()) || (panel in ['customer','mobile-customer'] && get(/databases/$(database)/documents/pf_offers/$(id)).data.ownerId==request.auth.uid) || (panel=='shop' && get(/databases/$(database)/documents/pf_offers/$(id)).data.shopId==request.auth.uid)))
+        || (type=='shops' && ((panel in ['admin','superadmin'] && admin()) || (panel=='shop' && id==request.auth.uid && exists(/databases/$(database)/documents/pf_shops/$(id)))))
+        || (type=='members' && panel=='superadmin' && superadmin() && exists(/databases/$(database)/documents/pf_members/$(id)))
+        || (type=='categories' && panel=='superadmin' && superadmin());
+    }
+    function deletableArchive(d){return (d.type=='requests' && deletingBySuperadmin(d.targetId)) || (d.type=='offers' && deletingBySuperadmin(get(/databases/$(database)/documents/pf_offers/$(d.targetId)).data.requestId));}
+    match /pf_archives/{uid}/panels/{panel}/items/{id} {
+      allow read: if signed() && (request.auth.uid==uid || deletableArchive(resource.data));
+      allow delete: if signed() && (request.auth.uid==uid || deletableArchive(resource.data));
+      allow create,update: if signed() && request.auth.uid==uid
+        && panel in ['customer','mobile-customer','shop','admin','superadmin']
+        && request.resource.data.keys().hasAll(['type','targetId','label','createdAt'])
+        && request.resource.data.keys().hasOnly(['type','targetId','label','createdAt'])
+        && request.resource.data.type in ['requests','offers','shops','members','categories']
+        && text(request.resource.data.targetId,300) && text(request.resource.data.label,120)
+        && request.resource.data.createdAt==request.time
+        && id==request.resource.data.type+'_'+request.resource.data.targetId
+        && archiveScope(panel,request.resource.data.type,request.resource.data.targetId);
+    }
+    // Commerce is additive: existing requests, offers, roles and archives retain their schema.
+    // pf_orders/{requestId}: immutable participants/offer, monotonic version, timestamps,
+    // status(confirmed/preparing/shipped/delivered/completed/cancelled), dispute(none/open/resolved).
+    // events/{version}: immutable actor, state snapshot, bounded reason, server timestamp.
+    // pf_messages: immutable offer-scoped participant text, never editable or deletable.
+    // pf_inbox/{uid}/receipts: private read markers; notifications derive from real records.
+    // pf_devices/{uid}/tokens: private Android FCM tokens; server-only sending.
+    function isOwner(uid){return signed() && request.auth.uid==uid;}
+    function participant(d){return signed() && (d.ownerId==request.auth.uid||d.shopId==request.auth.uid);}
+    function validOrder(d){return d.keys().hasAll(['requestId','offerId','ownerId','shopId','status','dispute','version','createdAt','updatedAt']) && d.keys().hasOnly(['requestId','offerId','ownerId','shopId','status','dispute','version','createdAt','updatedAt','confirmationId','confirmationVersion']) && text(d.requestId,128) && text(d.offerId,300) && text(d.ownerId,128) && text(d.shopId,128) && d.ownerId!=d.shopId && d.status in ['confirmed','preparing','shipped','delivered','completed','cancelled'] && d.dispute in ['none','open','resolved'] && d.version is int && d.version>=0 && d.version<1000000 && d.createdAt is timestamp && d.updatedAt is timestamp && ((!d.keys().hasAny(['confirmationId','confirmationVersion']))||(d.confirmationId==d.offerId && d.confirmationVersion is int && d.confirmationVersion>0 && d.confirmationVersion<1000000));}
+    function validEvent(e){return e.keys().hasAll(['actorId','kind','status','dispute','note','version','createdAt']) && e.keys().hasOnly(['actorId','kind','status','dispute','note','version','createdAt']) && text(e.actorId,128) && e.kind in ['confirmed','preparing','shipped','delivered','completed','cancelled','dispute','resolve'] && e.status in ['confirmed','preparing','shipped','delivered','completed','cancelled'] && e.dispute in ['none','open','resolved'] && text(e.note,1000) && e.version is int && e.version>=0 && e.version<1000000 && e.createdAt==request.time;}
+    function matchingEvent(id,d){let e=getAfter(/databases/$(database)/documents/pf_orders/$(id)/events/$(string(d.version))).data;return validEvent(e) && e.actorId==request.auth.uid && e.version==d.version && e.status==d.status && e.dispute==d.dispute;}
+    function orderSelection(id,d){let o=get(/databases/$(database)/documents/pf_offers/$(d.offerId)).data;let r=getAfter(/databases/$(database)/documents/pf_requests/$(id)).data;return d.requestId==id && o.requestId==id && o.ownerId==d.ownerId && o.shopId==d.shopId && r.ownerId==d.ownerId && r.acceptedOfferId==d.offerId && r.status=='closed' && ((!d.keys().hasAny(['confirmationId','confirmationVersion']) && get(/databases/$(database)/documents/pf_requests/$(id)).data.acceptedOfferId==d.offerId) || (d.confirmationId==d.offerId && getAfter(/databases/$(database)/documents/pf_confirmations/$(d.offerId)).data.status=='accepted' && getAfter(/databases/$(database)/documents/pf_confirmations/$(d.offerId)).data.version==d.confirmationVersion));}
+    function statusStep(a,b){return (a=='confirmed'&&b=='preparing')||(a=='preparing'&&b=='shipped')||(a=='shipped'&&b=='delivered')||(a=='delivered'&&b=='completed');}
+    function validOrderChange(id,a,b){
+      let e=getAfter(/databases/$(database)/documents/pf_orders/$(id)/events/$(string(b.version))).data;
+      return b.diff(a).affectedKeys().hasOnly(['status','dispute','version','updatedAt']) && b.version==a.version+1 && b.updatedAt==request.time && matchingEvent(id,b) && (
+        (b.status!=a.status && b.dispute==a.dispute && e.kind==b.status && (a.dispute!='open'||admin()) && (
+          (statusStep(a.status,b.status) && (admin()||(b.status=='completed'?isOwner(a.ownerId):isOwner(a.shopId)))) ||
+          (b.status=='cancelled' && ((a.status in ['confirmed','preparing'] && (participant(a)||admin())) || (a.status in ['shipped','delivered']&&admin())))
+        )) ||
+        (b.status==a.status && a.dispute=='none' && b.dispute=='open' && e.kind=='dispute' && participant(a)) ||
+        (b.status==a.status && a.dispute=='open' && b.dispute=='resolved' && e.kind=='resolve' && admin())
+      );
+    }
+    match /pf_orders/{id} {
+      allow get: if signed() && (admin() || (resource!=null && participant(resource.data)) || get(/databases/$(database)/documents/pf_requests/$(id)).data.ownerId==request.auth.uid);
+      allow list: if signed() && (admin()||participant(resource.data));
+      allow create: if !deleting(id) && signed() && validOrder(request.resource.data) && isOwner(request.resource.data.ownerId) && orderSelection(id,request.resource.data) && request.resource.data.status=='confirmed' && request.resource.data.dispute=='none' && request.resource.data.version==0 && request.resource.data.createdAt==request.time && request.resource.data.updatedAt==request.time && matchingEvent(id,request.resource.data) && getAfter(/databases/$(database)/documents/pf_orders/$(id)/events/0).data.kind=='confirmed';
+      allow update: if !deleting(id) && signed() && (participant(resource.data)||admin()) && validOrder(request.resource.data) && validOrderChange(id,resource.data,request.resource.data);
+      allow delete: if deletingBySuperadmin(id);
+      match /events/{version} {
+        allow delete: if deletingBySuperadmin(id);
+        allow read: if signed() && (admin()||participant(get(/databases/$(database)/documents/pf_orders/$(id)).data));
+        allow create: if !deleting(id) && signed() && validEvent(request.resource.data) && request.resource.data.actorId==request.auth.uid && version==string(request.resource.data.version) && matchingEvent(id,getAfter(/databases/$(database)/documents/pf_orders/$(id)).data) && getAfter(/databases/$(database)/documents/pf_orders/$(id)).data.version==request.resource.data.version && (!exists(/databases/$(database)/documents/pf_orders/$(id)) || get(/databases/$(database)/documents/pf_orders/$(id)).data.version+1==request.resource.data.version);
+      }
+    }
+    // Chat summaries, negotiated confirmations and visible administrator participation.
+    // Existing messages without kind remain ordinary participant messages.
+    function offerAccess(id){return signed() && (admin()||participant(get(/databases/$(database)/documents/pf_offers/$(id)).data));}
+    function chatOpen(d){let r=get(/databases/$(database)/documents/pf_requests/$(d.requestId)).data;return !deleting(d.requestId) && r.status!='hidden' && (r.status=='open'||r.acceptedOfferId==d.offerId);}
+    function offerFields(d){let o=get(/databases/$(database)/documents/pf_offers/$(d.offerId)).data;return d.requestId==o.requestId && d.ownerId==o.ownerId && d.shopId==o.shopId;}
+    function validMessage(d){return d.keys().hasAll(['offerId','requestId','ownerId','shopId','senderId','recipientId','text','createdAt']) && d.keys().hasOnly(['offerId','requestId','ownerId','shopId','senderId','recipientId','text','createdAt','kind','senderName','recipientIds']) && text(d.offerId,300) && text(d.requestId,128) && text(d.ownerId,128) && text(d.shopId,128) && text(d.senderId,128) && text(d.recipientId,128) && text(d.text,2000) && d.createdAt==request.time && ((!d.keys().hasAny(['kind','senderName','recipientIds']))||(d.kind in ['admin','admin_join']&&text(d.senderName,100)&&d.recipientIds is list&&d.recipientIds.size()==2&&d.recipientIds[0]==d.ownerId&&d.recipientIds[1]==d.shopId));}
+    function messageOffer(d,id){
+      let j=getAfter(/databases/$(database)/documents/pf_chat_admins/$(d.offerId+'_'+request.auth.uid));
+      return offerFields(d) && d.ownerId!=d.shopId && d.senderId==request.auth.uid && (
+        (!d.keys().hasAny(['kind']) && participant(d) && ((d.senderId==d.ownerId&&d.recipientId==d.shopId)||(d.senderId==d.shopId&&d.recipientId==d.ownerId))) ||
+        (d.get('kind','') in ['admin','admin_join'] && admin() && d.senderName==get(/databases/$(database)/documents/pf_members/$(request.auth.uid)).data.name && d.recipientId==d.ownerId && j.data.adminId==request.auth.uid && j.data.offerId==d.offerId && (d.kind!='admin_join'||(j.data.messageId==id&&d.text=='ადმინისტრატორი შემოუერთდა ჩატს')))
+      );
+    }
+    match /pf_messages/{id} {
+      allow read: if flag('chat','ON') && signed() && (admin() || participant(resource.data) || resource.data.recipientId==request.auth.uid);
+      allow create: if flag('chat','ON') && signed() && validMessage(request.resource.data) && chatOpen(request.resource.data) && messageOffer(request.resource.data,id) && getAfter(/databases/$(database)/documents/pf_chat_activity/$(request.resource.data.offerId)).data.lastMessageId==id;
+      allow delete: if deletingBySuperadmin(resource.data.requestId);
+    }
+    function validActivity(d){return d.keys().hasAll(['offerId','requestId','ownerId','shopId','lastMessageId','lastSenderId','lastText','lastKind','customerReplied','shopReplied','version','createdAt','updatedAt']) && d.keys().hasOnly(['offerId','requestId','ownerId','shopId','lastMessageId','lastSenderId','lastText','lastKind','customerReplied','shopReplied','version','createdAt','updatedAt']) && text(d.offerId,300) && text(d.requestId,128) && text(d.ownerId,128) && text(d.shopId,128) && text(d.lastMessageId,128) && text(d.lastSenderId,128) && text(d.lastText,2000) && d.lastKind in ['message','admin','admin_join'] && d.customerReplied is bool && d.shopReplied is bool && d.version is int && d.version>0 && d.version<1000000000 && d.createdAt is timestamp && d.updatedAt==request.time;}
+    function activityMessage(d,previous){
+      let m=getAfter(/databases/$(database)/documents/pf_messages/$(d.lastMessageId)).data;
+      return !exists(/databases/$(database)/documents/pf_messages/$(d.lastMessageId)) && m.createdAt==request.time && m.offerId==d.offerId && m.requestId==d.requestId && m.ownerId==d.ownerId && m.shopId==d.shopId && m.senderId==request.auth.uid && d.lastSenderId==m.senderId && d.lastText==m.text && d.lastKind==m.get('kind','message') && d.customerReplied==(previous.get('customerReplied',false)||(m.get('kind','message')=='message'&&m.senderId==d.ownerId)) && d.shopReplied==(previous.get('shopReplied',false)||(m.get('kind','message')=='message'&&m.senderId==d.shopId));
+    }
+    match /pf_chat_activity/{id} {
+      allow get: if offerAccess(id);
+      allow list: if flag('chat','ON') && signed() && (admin()||participant(resource.data));
+      allow create: if flag('chat','ON') && signed() && validActivity(request.resource.data) && id==request.resource.data.offerId && offerFields(request.resource.data) && chatOpen(request.resource.data) && request.resource.data.version==1 && request.resource.data.createdAt==request.time && activityMessage(request.resource.data,{});
+      allow update: if flag('chat','ON') && signed() && validActivity(request.resource.data) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastMessageId','lastSenderId','lastText','lastKind','customerReplied','shopReplied','version','updatedAt']) && request.resource.data.version==resource.data.version+1 && chatOpen(resource.data) && activityMessage(request.resource.data,resource.data);
+      allow delete: if deletingBySuperadmin(resource.data.requestId);
+    }
+    function validParticipation(d){return d.keys().hasAll(['offerId','requestId','ownerId','shopId','adminId','adminName','messageId','createdAt']) && d.keys().hasOnly(['offerId','requestId','ownerId','shopId','adminId','adminName','messageId','createdAt']) && text(d.offerId,300) && text(d.requestId,128) && text(d.ownerId,128) && text(d.shopId,128) && text(d.adminId,128) && text(d.adminName,100) && text(d.messageId,128) && d.createdAt==request.time;}
+    match /pf_chat_admins/{id} {
+      allow get: if signed() && (admin()||participant(resource.data));
+      allow list: if signed() && (admin()||participant(resource.data));
+      allow create: if admin() && validParticipation(request.resource.data) && id==request.resource.data.offerId+'_'+request.auth.uid && request.resource.data.adminId==request.auth.uid && request.resource.data.adminName==get(/databases/$(database)/documents/pf_members/$(request.auth.uid)).data.name && offerFields(request.resource.data) && chatOpen(request.resource.data) && getAfter(/databases/$(database)/documents/pf_messages/$(request.resource.data.messageId)).data.kind=='admin_join' && getAfter(/databases/$(database)/documents/pf_messages/$(request.resource.data.messageId)).data.senderId==request.auth.uid && getAfter(/databases/$(database)/documents/pf_messages/$(request.resource.data.messageId)).data.offerId==request.resource.data.offerId && getAfter(/databases/$(database)/documents/pf_messages/$(request.resource.data.messageId)).data.createdAt==request.time && !exists(/databases/$(database)/documents/pf_messages/$(request.resource.data.messageId));
+      allow delete: if deletingBySuperadmin(resource.data.requestId);
+    }
+    function validConfirmation(d){return d.keys().hasAll(['offerId','requestId','ownerId','shopId','price','condition','delivery','note','status','version','createdAt','updatedAt']) && d.keys().hasOnly(['offerId','requestId','ownerId','shopId','price','serviceAvailable','servicePrice','condition','delivery','note','status','version','createdAt','updatedAt','customerMessageId','shopMessageId']) && text(d.offerId,300) && text(d.requestId,128) && text(d.ownerId,128) && text(d.shopId,128) && d.price is number && d.price>0 && d.price<=1000000 && (!d.keys().hasAny(['serviceAvailable','servicePrice']) || (d.keys().hasAll(['serviceAvailable','servicePrice']) && d.serviceAvailable is bool && d.servicePrice is number && d.servicePrice>=0 && d.servicePrice<=1000000 && (d.serviceAvailable || d.servicePrice==0))) && d.condition in ['ახალი','მეორადი'] && text(d.delivery,120) && text(d.note,1000) && d.status in ['pending','accepted','declined','withdrawn'] && d.version is int && d.version>0 && d.version<1000000 && d.createdAt is timestamp && d.updatedAt==request.time && ((!d.keys().hasAny(['customerMessageId','shopMessageId']))||(text(d.customerMessageId,128)&&text(d.shopMessageId,128)));}
+    function legacyConversation(d){let c=get(/databases/$(database)/documents/pf_messages/$(d.customerMessageId)).data;let s=get(/databases/$(database)/documents/pf_messages/$(d.shopMessageId)).data;return c.offerId==d.offerId&&s.offerId==d.offerId&&c.senderId==d.ownerId&&s.senderId==d.shopId&&c.get('kind','message')=='message'&&s.get('kind','message')=='message';}
+    function confirmationStart(d){let a=get(/databases/$(database)/documents/pf_chat_activity/$(d.offerId)).data;return isOwner(d.shopId) && get(/databases/$(database)/documents/pf_shops/$(d.shopId)).data.status=='approved' && offerFields(d) && !deleting(d.requestId) && get(/databases/$(database)/documents/pf_requests/$(d.requestId)).data.status=='open' && ((a.customerReplied && a.shopReplied)||(d.keys().hasAll(['customerMessageId','shopMessageId'])&&legacyConversation(d))) && d.status=='pending';}
+    function confirmationAnswer(a,b){return b.diff(a).affectedKeys().hasOnly(['status','updatedAt']) && a.status=='pending' && !deleting(a.requestId) && get(/databases/$(database)/documents/pf_requests/$(a.requestId)).data.status=='open' && ((b.status=='withdrawn'&&isOwner(a.shopId))||(b.status=='declined'&&isOwner(a.ownerId))||(b.status=='accepted'&&isOwner(a.ownerId)&&get(/databases/$(database)/documents/pf_shops/$(a.shopId)).data.status=='approved'&&getAfter(/databases/$(database)/documents/pf_requests/$(a.requestId)).data.acceptedOfferId==a.offerId&&getAfter(/databases/$(database)/documents/pf_orders/$(a.requestId)).data.confirmationVersion==a.version));}
+    match /pf_confirmations/{id} {
+      allow get: if offerAccess(id);
+      allow list: if signed() && (admin()||participant(resource.data));
+      allow create: if validConfirmation(request.resource.data) && id==request.resource.data.offerId && request.resource.data.version==1 && request.resource.data.createdAt==request.time && confirmationStart(request.resource.data);
+      allow update: if validConfirmation(request.resource.data) && (confirmationAnswer(resource.data,request.resource.data)||(resource.data.status in ['declined','withdrawn'] && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['price','serviceAvailable','servicePrice','condition','delivery','note','status','version','updatedAt','customerMessageId','shopMessageId']) && request.resource.data.version==resource.data.version+1 && confirmationStart(request.resource.data)));
+      allow delete: if deletingBySuperadmin(resource.data.requestId);
+    }
+    match /pf_chat_reads/{uid}/threads/{offerId} {
+      allow read,delete: if isOwner(uid);
+      allow create,update: if isOwner(uid) && offerAccess(offerId) && request.resource.data.keys().hasAll(['version','updatedAt']) && request.resource.data.keys().hasOnly(['version','updatedAt']) && request.resource.data.version is int && request.resource.data.version>=0 && request.resource.data.version<=get(/databases/$(database)/documents/pf_chat_activity/$(offerId)).data.version && request.resource.data.updatedAt==request.time;
+    }
+    match /pf_inbox/{uid}/receipts/{id} {
+      allow read,delete: if isOwner(uid);
+      allow create,update: if isOwner(uid) && id.size()<=400 && request.resource.data.keys().hasOnly(['createdAt']) && request.resource.data.createdAt==request.time;
+    }
+    function validDevice(d){return d.keys().hasAll(['token','platform','updatedAt']) && d.keys().hasOnly(['token','platform','updatedAt']) && text(d.token,4096) && d.platform=='android' && d.updatedAt==request.time;}
+    match /pf_devices/{uid}/tokens/{id} {
+      allow read,delete: if isOwner(uid);
+      allow create,update: if flag('pushNotifications','OFF') && isOwner(uid) && id.matches('[a-f0-9]{64}') && validDevice(request.resource.data);
+    }
+    // Content-free permanent deletion lock: blocks recreation and supports interrupted cascades.
+    function validDeletion(d){return d.keys().hasAll(['requestedBy','status','createdAt','updatedAt']) && d.keys().hasOnly(['requestedBy','status','createdAt','updatedAt']) && text(d.requestedBy,128) && d.status in ['pending','completed'] && d.createdAt is timestamp && d.updatedAt==request.time;}
+    match /pf_settings/{id} {
+      allow read: if (id in ['infrastructure','rewards'] && superadmin()) || (id == 'control' && signed());
+      allow create: if id == 'infrastructure' && superadmin() && validInfrastructure(request.resource.data) && request.resource.data.updatedAt == request.time && request.resource.data.updatedBy == request.auth.uid;
+      allow update: if id == 'infrastructure' && superadmin() && validInfrastructure(request.resource.data) && request.resource.data.updatedAt == request.time && request.resource.data.updatedBy == request.auth.uid;
+      allow create,update: if id == 'control' && superadmin() && validControl(request.resource.data) && request.resource.data.updatedAt == request.time && request.resource.data.updatedBy == request.auth.uid && request.resource.data.revision == (resource == null ? 1 : resource.data.revision + 1);
+      allow create,update: if id=='rewards' && superadmin() && request.resource.data.keys().hasAll(['referralPoints','voucherPoints','voucherValue','updatedBy','updatedAt']) && request.resource.data.keys().hasOnly(['referralPoints','voucherPoints','voucherValue','updatedBy','updatedAt']) && request.resource.data.referralPoints is int && request.resource.data.referralPoints>=1 && request.resource.data.referralPoints<=1000000 && request.resource.data.voucherPoints is int && request.resource.data.voucherPoints>=1 && request.resource.data.voucherPoints<=1000000 && request.resource.data.voucherValue is int && request.resource.data.voucherValue>=1 && request.resource.data.voucherValue<=1000000 && request.resource.data.updatedBy==request.auth.uid && request.resource.data.updatedAt==request.time;
+      allow delete: if false;
+    }
+    function controlAudit(d){let a=getAfter(/databases/$(database)/documents/pf_control_audit/$(string(d.revision))).data;return a.actorId==request.auth.uid && a.revision==d.revision && a.after.flags==d.flags && a.after.message==d.message && a.createdAt==request.time;}
+    function validControl(d){return controlAudit(d) && d.keys().hasAll(['schemaVersion','flags','message','revision','updatedBy','updatedAt']) && d.keys().hasOnly(['schemaVersion','flags','message','revision','updatedBy','updatedAt']) && d.schemaVersion == 1 && d.flags is map && d.flags.keys().hasAll(['godMode','maintenance','aiOrderAssistant','anonymousApkAuth','smsOtp','phoneRecovery','emailLinking','referrals','loyaltyPoints','vouchers','webAuthRequired','orders','offers','chat','garage','phoneContact','partnerPromotions','vip','pushNotifications']) && d.flags.keys().hasOnly(['godMode','maintenance','aiOrderAssistant','anonymousApkAuth','smsOtp','phoneRecovery','emailLinking','referrals','loyaltyPoints','vouchers','webAuthRequired','orders','offers','chat','garage','phoneContact','partnerPromotions','vip','pushNotifications']) && d.flags.values().hasOnly(['OFF','TEST','LIMITED','ON']) && d.flags.webAuthRequired=='ON' && (d.flags.phoneRecovery!='ON'||d.flags.smsOtp=='ON') && (d.flags.loyaltyPoints!='ON'||d.flags.referrals=='ON') && (d.flags.vouchers!='ON'||(d.flags.loyaltyPoints=='ON'&&d.flags.partnerPromotions=='ON')) && d.message is string && d.message.size() >= 1 && d.message.size() <= 240 && d.revision is int && d.revision >= 1 && d.updatedBy == request.auth.uid && d.updatedAt is timestamp;}
+    match /pf_control_audit/{id} {
+      allow read: if superadmin();
+      allow create: if superadmin() && request.resource.data.keys().hasAll(['action','revision','actorId','before','after','createdAt']) && request.resource.data.keys().hasOnly(['action','revision','actorId','before','after','createdAt']) && request.resource.data.action in ['update','rollback'] && request.resource.data.revision is int && request.resource.data.actorId == request.auth.uid && request.resource.data.before is map && request.resource.data.after is map && id==string(request.resource.data.revision) && getAfter(/databases/$(database)/documents/pf_settings/control).data.revision==request.resource.data.revision && getAfter(/databases/$(database)/documents/pf_settings/control).data.flags==request.resource.data.after.flags && request.resource.data.createdAt == request.time;
+      allow update,delete: if false;
+    }
+    match /pf_deletions/{id} {
+      allow read: if superadmin();
+      allow create: if superadmin() && text(id,128) && validDeletion(request.resource.data) && request.resource.data.requestedBy==request.auth.uid && request.resource.data.status=='pending' && request.resource.data.createdAt==request.time && exists(/databases/$(database)/documents/pf_requests/$(id));
+      allow update: if superadmin() && validDeletion(request.resource.data) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt']) && resource.data.status=='pending' && request.resource.data.status=='completed';
+    }
+    // Towing: private driver applications and immutable dispatch details. No GPS history.
+    function towCity(c){return c is string && c.size()<=40 && c.matches('(თბილისი|ბათუმი|ქუთაისი|რუსთავი|გორი|ზუგდიდი|ფოთი|თელავი|ახალციხე|ახალქალაქი|ბორჯომი|ხაშური|ქობულეთი|ოზურგეთი|სენაკი|მარტვილი|სამტრედია|ზესტაფონი|ჭიათურა|საჩხერე|ამბროლაური|ონი|მესტია|ლენტეხი|ცაგერი|დუშეთი|მცხეთა|ყაზბეგი|გურჯაანი|სიღნაღი|ლაგოდეხი|ყვარელი|დედოფლისწყარო|საგარეჯო|ბოლნისი|მარნეული|დმანისი|წალკა|თეთრიწყარო|ნინოწმინდა|ადიგენი|ასპინძა|ლანჩხუთი|ჩოხატაური|ხობი|წალენჯიხა|ჩხოროწყუ|აბაშა|წყალტუბო|ტყიბული|თერჯოლა|ბაღდათი|ვანი|ხარაგაული|ქარელი|კასპი|თიანეთი|ახმეტა|ხელვაჩაური|ქედა|შუახევი|ხულო|სოხუმი|გაგრა|გუდაუთა|ოჩამჩირე|გალი|ტყვარჩელი|ცხინვალი|ჯავა|ახალგორი)');}
+    function validTowDriver(d){return d.keys().hasAll(['ownerId','name','phone','city','truck','status','updatedAt']) && d.keys().hasOnly(['ownerId','name','phone','city','truck','status','updatedAt']) && text(d.ownerId,128) && text(d.name,100) && d.phone is string && d.phone.matches('[+]9955[0-9]{8}') && towCity(d.city) && text(d.truck,160) && d.status in ['pending','approved','rejected','suspended'] && d.updatedAt==request.time;}
+    function towDriver(){return get(/databases/$(database)/documents/pf_tow_drivers/$(request.auth.uid)).data;}
+    function approvedTowDriver(){return signed() && towDriver().status=='approved';}
+    function towEligible(d){return approvedTowDriver() && d.status=='searching' && (d.scope=='all' || (d.scope=='city' && d.city==towDriver().city));}
+    function validTowLocation(l){return l is map && l.keys().hasAll(['lat','lng']) && l.keys().hasOnly(['lat','lng']) && l.lat is number && l.lng is number && l.lat>=-90 && l.lat<=90 && l.lng>=-180 && l.lng<=180;}
+    function validTow(d){return d.keys().hasAll(['mode','city','destinationCity','origin','destination','vehicle','condition','notes','phone','pickupAt','location','scope','ownerId','status','driverId','quote','driverName','driverPhone','createdAt','updatedAt','expandedAt']) && d.keys().hasOnly(['mode','city','destinationCity','origin','destination','vehicle','condition','notes','phone','pickupAt','location','scope','ownerId','status','driverId','quote','driverName','driverPhone','createdAt','updatedAt','expandedAt']) && d.mode in ['sos','intercity'] && towCity(d.city) && towCity(d.destinationCity) && text(d.origin,300) && text(d.destination,300) && text(d.vehicle,160) && d.condition in ['rolls','blocked','accident'] && d.notes is string && d.notes.size()<=1000 && d.phone is string && d.phone.matches('[+]9955[0-9]{8}') && text(d.ownerId,128) && d.createdAt is timestamp && d.updatedAt==request.time && d.status in ['searching','offered','confirmed','en_route','transporting','completed','cancelled'] && d.scope in ['city','all'] && (d.expandedAt==null || d.expandedAt is timestamp) && ((d.mode=='sos' && validTowLocation(d.location) && d.pickupAt==null) || (d.mode=='intercity' && d.location==null && d.pickupAt is timestamp && d.scope=='all' && d.expandedAt==null)) && ((d.driverId==null && d.quote==null && d.driverName==null && d.driverPhone==null && d.status in ['searching','cancelled']) || (text(d.driverId,128) && d.driverId!=d.ownerId && d.quote is number && d.quote>0 && d.quote<=1000000 && text(d.driverName,100) && d.driverPhone is string && d.driverPhone.matches('[+]9955[0-9]{8}') && d.status!='searching'));}
+    match /pf_tow_drivers/{uid} {
+      allow read: if signed() && (request.auth.uid==uid || admin());
+      allow create: if signed() && request.auth.uid==uid && validTowDriver(request.resource.data) && request.resource.data.ownerId==uid && request.resource.data.status=='pending';
+      allow update: if signed() && validTowDriver(request.resource.data) && request.resource.data.ownerId==resource.data.ownerId && ((request.auth.uid==uid && resource.data.status in ['pending','rejected'] && request.resource.data.status=='pending') || (admin() && request.auth.uid!=uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt'])));
+      allow delete: if false;
+    }
+    match /pf_tow_requests/{id} {
+      allow read: if signed() && (resource.data.ownerId==request.auth.uid || resource.data.driverId==request.auth.uid || admin() || towEligible(resource.data));
+      allow create: if signed() && validTow(request.resource.data) && request.resource.data.ownerId==request.auth.uid && request.resource.data.status=='searching' && request.resource.data.driverId==null && request.resource.data.createdAt==request.time && request.resource.data.expandedAt==null && ((request.resource.data.mode=='sos' && request.resource.data.scope=='city') || (request.resource.data.mode=='intercity' && request.resource.data.pickupAt>request.time));
+      allow update: if signed() && validTow(request.resource.data) && (
+        // First successful atomic claim reserves the request; all other drivers lose access.
+        (towEligible(resource.data) && resource.data.ownerId!=request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','driverId','driverName','driverPhone','quote','updatedAt']) && request.resource.data.status=='offered' && request.resource.data.driverId==request.auth.uid && request.resource.data.driverName==towDriver().name && request.resource.data.driverPhone==towDriver().phone)
+        || (resource.data.ownerId==request.auth.uid && (
+          (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['scope','expandedAt','updatedAt']) && resource.data.mode=='sos' && resource.data.status=='searching' && resource.data.scope=='city' && request.time>=resource.data.createdAt+duration.value(15,'m') && request.resource.data.scope=='all' && request.resource.data.expandedAt==request.time)
+          || (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt']) && ((resource.data.status=='offered' && request.resource.data.status=='confirmed' && get(/databases/$(database)/documents/pf_tow_drivers/$(resource.data.driverId)).data.status=='approved') || (resource.data.status in ['searching','offered','confirmed'] && request.resource.data.status=='cancelled') || (resource.data.status=='transporting' && request.resource.data.status=='completed')))
+        ))
+        || (approvedTowDriver() && resource.data.driverId==request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt']) && ((resource.data.status=='confirmed' && request.resource.data.status=='en_route') || (resource.data.status=='en_route' && request.resource.data.status=='transporting')))
+      );
+      allow delete: if false;
+    }
+    match /{document=**} {allow read,write: if false;}
+  }
+}
